@@ -1,7 +1,56 @@
-.selected {
-    font-weight: bold;
+ul.number-list {
+    display: flex;
+    gap: 1em;
+    list-style: none;
+    padding: 0;
 }
 
 .used {
     font-style: italic;
+}
+
+.possible:not(.used) {
+    background: lightgreen;
+}
+
+#sequence {
+    display: grid;
+    grid-template-rows: repeat(2,2em);
+    grid-auto-flow: column;
+    grid-auto-columns: 5em;
+}
+#sequence li {
+    display: grid;
+    grid-template-rows: subgrid;
+    grid-row: 1 / 3;
+    justify-items: center;
+}
+
+#diagram {
+    background: black;
+    max-width: 50vmin;
+    max-height: 50vmin;
+}
+
+.planet {
+    cursor: pointer;
+    
+    --planet-colour: grey;
+
+    & circle {
+        stroke: white;
+        fill: var(--planet-colour);
+    }
+    
+    &.possible {
+        --planet-colour: green;
+    }
+
+    &.must-end {
+        --planet-colour: blue;
+    }
+
+    &:not(.possible) {
+        filter: grayscale(1);
+    }
 }
