@@ -8,11 +8,49 @@ import Html.Attributes as HA
 import Html.Events as HE
 import Json.Decode as JD
 import List.Extra
+import Random as R
+import Random.List
 import Set exposing (Set)
 import Svg exposing (Svg)
 import Svg.Attributes as SA
 import Svg.Events as SE
 import Tuple exposing (first, second, pair)
+
+generate_game : R.Generator Game
+generate_game =
+    let
+        generate_next prev (a,b) = 
+            let
+                outputs : List Int
+                outputs = 
+                       [Add, Subtract, Multiply, Divide]
+                    |> List.filterMap ((\op -> case do_op op a b of
+                        Ok d -> 
+                            let
+                                c = modBy 10 d
+                            in
+                                if c /=0 then Just c else Nothing
+                        Err _ -> Nothing))
+                    |> Debug.log ("outputs" ++ (Debug.toString (a,b)))
+
+                rc : R.Generator Int
+                rc = case outputs of
+                    q::rest -> R.uniform q rest
+                    [] -> R.uniform 0 []
+            in
+                if List.length prev < 9 - 3 then
+                    R.andThen (\c -> generate_next (a::prev) (b,c)) rc
+                else
+                    R.map (\c -> c::b::a::prev) rc
+    in
+       R.pair (R.int 1 9) (R.int 1 9)
+    |> R.andThen (generate_next [])
+    |> R.andThen (\l -> case l of
+        a::rest -> Random.List.shuffle rest |> R.map (\srest -> (a,True)::(List.map (\x -> (x,False)) srest))
+        [] -> R.uniform [] []
+       )
+    |> R.map Array.fromList
+    |> R.map (\numbers -> { init_game | numbers = numbers })
 
 type Op
     = Add
@@ -45,6 +83,7 @@ type Msg
     | PickNumber Int -- Pick the first available instance of this number
     | Backspace
     | SaveSequence
+    | SetGame Game
 
 {- makes a list of:
     Nothing: not filled
@@ -88,7 +127,7 @@ pairs : List a -> List (a,a)
 pairs l = List.map2 pair l (List.drop 1 l)
 
 init: () -> (Model, Cmd Msg)
-init _ = (init_model, Cmd.none)
+init _ = (init_model, R.generate SetGame generate_game)
 used_in_sequence game i = List.member i game.sequence
 
 update : Msg -> Model -> (Model, Cmd Msg)
@@ -127,6 +166,8 @@ update msg model =
                     { model | found_sequences = Set.insert sequence model.found_sequences, game = { game | sequence = [] } } |> nocmd
                 else
                     noop
+
+            SetGame ngame -> { model | game = ngame } |> nocmd
 
 use_number game i = if used_in_sequence game i then game else { game | sequence = i :: game.sequence }
 
@@ -251,8 +292,8 @@ view model =
         view_sequence_item i (n, verity) =
             H.li
                 []
-                [ H.button
-                    [ HE.onClick <| ClickSequence i ]
+                [ H.span
+                    []
                     [ H.text <| fi n
                     ]
                 , H.div
@@ -280,11 +321,23 @@ view model =
 
         radius = big_r * (sin (pi / (tf num_planets))) / (1 + gap_radiuses)
 
+        angle_for i = ((tf i) + 1) / (tf num_planets) * 2 * pi
+
         coords_for i = 
             let
-                angle = ((tf i) + 1) / (tf num_planets) * 2 * pi
+                angle = angle_for i
             in  
-                (big_r * (sin angle), big_r * (cos angle))
+                (big_r * (cos angle), big_r * (sin angle))
+
+        rocket_planet = game.sequence |> List.head |> Maybe.withDefault home_index
+
+        (rocket_x, rocket_y) = coords_for rocket_planet
+
+        rocket_angle = (angle_for rocket_planet) * 180 / pi - 90
+
+        hint = case sequence of
+            b::a::_ -> "Find a planet you can get to by combining "++(fi b)++" and "++(fi a)++"."
+            _ -> "Pick any planet to jump to."
 
         view_planet : (Int, Maybe NumberInfo) -> Svg Msg
         view_planet (i,minfo) =
@@ -329,16 +382,29 @@ view model =
             let
                 (x1,y1) = coords_for from
                 (x2,y2) = coords_for to
+                diff = (tf <| (from - to)) / (tf num_planets) |> (\x -> if x>0.5 then x-1 else x) |> (\y -> if y < -0.5 then y+1 else y)
+                angle = diff * pi |> abs
+                d = big_r * (tan angle)
+                sd = d |> abs |> ff
+                sweep = if diff >0 then "1" else "0"
             in
-                Svg.line
-                    [ SA.x1 <| ff x1
-                    , SA.y1 <| ff y1
-                    , SA.x2 <| ff x2
-                    , SA.y2 <| ff y2
-                    , SA.stroke "white"
-                    , SA.class "jump"
-                    ]
-                    []
+                if abs diff == 0.5 then
+                    Svg.line
+                        [ SA.x1 <| ff x1
+                        , SA.y1 <| ff y1
+                        , SA.x2 <| ff x2
+                        , SA.y2 <| ff y2
+                        , SA.class "jump"
+                        ]
+                        []
+                else
+                    Svg.path
+                        [ SA.d <| String.join " " ["M",ff x1,ff y1,"A", sd, sd, "0", "0", sweep, ff x2, ff y2]
+                        , SA.class "jump"
+                        , HA.attribute "data-d" <| ff d
+                        , HA.attribute "data-diff" <| ff <| Debug.log "diff" diff
+                        ]
+                        []
 
         view_diagram =
             Svg.svg
@@ -361,13 +427,26 @@ view model =
                 , Svg.g
                     []
                     (List.map view_planet planets)
+
+                , Svg.image
+                    [ SA.xlinkHref "rocket.svg#rocket"
+                    , SA.width "10"
+                    , SA.height "18.990"
+                    , SA.transform <| "translate("++(ff rocket_x)++" "++(ff rocket_y)++") rotate("++(ff rocket_angle)++") translate(0 "++(ff <| -radius)++") translate(-5 -15.7)"
+                    ]
+                    []
+
                 ]
     in
         { title = "Hyperjumps"
         , body = 
             [ H.section
                 []
-                [ view_diagram ]
+                [ H.p [] [ H.text "Jump between the planets and try to end up at the destination planet. Your first two jumps are free, but after that, your jumps are limited. Combine the number of the previous planet and the one you're currently on, with either addition, subtraction, multiplication or division. You can jump to planets whose number is the same as the last digit as the result of the combination you choose." ]
+                , H.p [] [ H.strong [] [H.text "Hint:"], H.text " ", H.text hint ]
+                ]
+
+            , view_diagram
 
             , H.section
                 []
