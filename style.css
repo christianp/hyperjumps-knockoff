@@ -16,7 +16,7 @@ body {
     font-family: sans-serif;
 }
 
-main#rules {
+main#rules, footer {
     padding: 1em;
 }
 
@@ -131,6 +131,11 @@ code {
 .jump {
     stroke: white;
     fill: none;
+
+    &.invalid {
+        stroke-dasharray: 3 3;
+        stroke: hsl(0, 90%,60%);
+    }
 }
 
 #hint {

@@ -31,7 +31,6 @@ generate_game =
                             in
                                 if c /=0 then Just c else Nothing
                         Err _ -> Nothing))
-                    |> Debug.log ("outputs" ++ (Debug.toString (a,b)))
 
                 rc : R.Generator Int
                 rc = case outputs of
@@ -146,7 +145,7 @@ update msg model =
 
         noop = nocmd model
     in
-        case (Debug.log "msg" msg) of
+        case msg of
             ClickNumber i -> case List.head game.sequence of
                 Just 0 -> model |> nocmd
                 _ -> { model | game = use_number game i } |> nocmd
@@ -204,7 +203,7 @@ isOk r = case r of
     Err _ -> False
 
 type alias IntTriple = (Int,Int,Int)
-type alias OpError = (String, IntTriple)
+type alias OpError = (String, Maybe IntTriple)
 type alias OpResult = (Op, IntTriple)
 
 valid_triple : (Int, Int, Int) -> Result OpError OpResult
@@ -216,15 +215,29 @@ valid_triple (a,b,c) =
     |> List.head
     |> \mres -> case mres of
         Just res -> Ok res
-        Nothing -> Err ("No sums work", (a,b,c))
+        Nothing -> Err ("No sums work", Just (a,b,c))
 
 filled_triple : (Maybe Int, Maybe Int,  Maybe Int) -> Maybe (Int, Int, Int)
 filled_triple (ma, mb, mc) = case (ma, mb, mc) of
     (Just a, Just b, Just c) -> Just (a,b,c)
     _ -> Nothing
 
---verify_hyperjumps : List (Maybe Int) -> List (Maybe (Op, IntTriple))
-verify_hyperjumps = verify_triples valid_triple
+{- Verify the list of jumps. Either:
+    Nothing - this jump was free so can't go wrong
+    Just (Err err) - this jump was invalid
+    Just (Ok (op, (a,b,c))) - this jump was correct and (a op b) = c
+-}
+verify_hyperjumps : List Int -> List Int -> List (Maybe (Result OpError OpResult))
+verify_hyperjumps indexes sequence = 
+       verify_triples valid_triple sequence
+    |> List.map2 pair (List.reverse indexes)
+    |> List.foldl (\(i,v) prev -> 
+        let
+            r = if i==0 && List.length prev < 2 then Just (Err ("You jumped to the destination too soon. You must visit at least 3 planets.", Nothing)) else v
+        in
+            prev++[r]
+        )
+        []
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
@@ -244,7 +257,7 @@ valid_sequence game =
        (game_finished game)
     && (List.length game.sequence >= 3)
     && (   make_sequence game
-        |> verify_hyperjumps
+        |> (verify_hyperjumps game.sequence)
         |> List.all (\v -> case v of
             Just (Err _) -> False
             _ -> True
@@ -262,10 +275,17 @@ game_finished game =
 view : Model -> Browser.Document Msg
 view model =
     { title = "Hyperjumps"
-    , body = [ case model.screen of
-        RulesScreen -> H.main_ [ HA.id "rules" ] (view_rules model)
-        GameScreen -> H.main_ [ HA.id "game" ] (view_game model)
-        ]
+    , body = case model.screen of
+        RulesScreen -> 
+            [ H.main_ [ HA.id "rules" ] (view_rules model)
+            , H.footer 
+                []
+                [ H.p [] [H.text "Based on ", H.a [ HA.href "https://www.quantamagazine.org/hyperjumps-math-game-20240216/" ] [ H.text "Hyperjumps" ], H.text " by Quanta magazine." ]
+                , H.p [] [H.text "This version made by ", H.a [HA.href "https://somethingorotherwhatever.com"] [ H.text "clp" ], H.text "." ]
+                ]
+            ]
+
+        GameScreen -> [ H.main_ [ HA.id "game" ] (view_game model) ]
     }
 
 para text = H.p [] [ H.text text ]
@@ -294,6 +314,9 @@ view_rules model =
         [ H.text "Play" ]
     ]
 
+svg_classList : List (String, Bool) -> Svg.Attribute Msg
+svg_classList = SA.class << String.join " " << List.map first << List.filter second
+
 view_game : Model -> List (Html Msg)
 view_game model = 
     let
@@ -301,7 +324,8 @@ view_game model =
 
         sequence = make_sequence game
 
-        verifications = verify_hyperjumps sequence
+        verifications : List (Maybe (Result OpError OpResult))
+        verifications = verify_hyperjumps game.sequence sequence 
 
         finished = game_finished game
 
@@ -392,21 +416,18 @@ view_game model =
 
         last_move_desc = 
             last_move |> Maybe.map (\ld -> 
-                if ended_too_soon then
-                    [ H.text "You jumped to the destination too soon. You must visit at least 3 planets." ]
-                else
-                    case ld of
-                        Nothing -> 
-                            let
-                                n =    Array.get rocket_planet game.numbers
-                                    |> Maybe.map (first >> fi)
-                                    |> Maybe.withDefault "Home"
-                            in
-                                [ H.text <| "Jumped to "++n ]
+                case ld of
+                    Nothing -> 
+                        let
+                            n =    Array.get rocket_planet game.numbers
+                                |> Maybe.map (first >> fi)
+                                |> Maybe.withDefault "Home"
+                        in
+                            [ H.text <| "Jumped to "++n ]
 
-                        Just (Ok operation) -> describe_op operation
+                    Just (Ok operation) -> describe_op operation
 
-                        Just (Err err) -> describe_error err
+                    Just (Err err) -> describe_error err
             )
 
         view_planet : (Int, Maybe NumberInfo) -> Svg Msg
@@ -425,7 +446,7 @@ view_game model =
                     , SE.onClick <| if is_home then ClickSequence (-1) else case position_in_sequence of
                         Just j -> ClickSequence j
                         Nothing -> ClickNumber i
-                    , SA.class <| String.join " " <| List.map first <| List.filter second <|
+                    , svg_classList 
                         [ ("planet", True)
                         , ("possible", possible)
                         , ("used", used)
@@ -448,7 +469,7 @@ view_game model =
                         ]
                     ]
 
-        view_jump (from, to) =
+        view_jump v (from, to) =
             let
                 (x1,y1) = coords_for from
                 (x2,y2) = coords_for to
@@ -457,6 +478,14 @@ view_game model =
                 d = big_r * (tan angle)
                 sd = d |> abs |> ff
                 sweep = if diff >0 then "1" else "0"
+                class = case v of
+                    Nothing -> "free"
+                    Just (Ok _) -> "valid"
+                    Just (Err _) -> "invalid"
+                classes = svg_classList
+                    [ ("jump", True)
+                    , (class, True)
+                    ]
             in
                 if abs diff == 0.5 then
                     Svg.line
@@ -464,15 +493,15 @@ view_game model =
                         , SA.y1 <| ff y1
                         , SA.x2 <| ff x2
                         , SA.y2 <| ff y2
-                        , SA.class "jump"
+                        , classes
                         ]
                         []
                 else
                     Svg.path
                         [ SA.d <| String.join " " ["M",ff x1,ff y1,"A", sd, sd, "0", "0", sweep, ff x2, ff y2]
-                        , SA.class "jump"
+                        , classes
                         , HA.attribute "data-d" <| ff d
-                        , HA.attribute "data-diff" <| ff <| Debug.log "diff" diff
+                        , HA.attribute "data-diff" <| ff diff
                         ]
                         []
 
@@ -492,7 +521,7 @@ view_game model =
 
                 , Svg.g
                     []
-                    (home_index::(List.reverse game.sequence) |> pairs |> List.map view_jump)
+                    (home_index::(List.reverse game.sequence) |> pairs |> List.map2 view_jump verifications)
 
                 , Svg.g
                     []
@@ -580,19 +609,21 @@ describe_op (op, (a,b,c)) =
         , important_digits (modBy 10 c)
         ]
 
-describe_error : (String, IntTriple) -> List (Html Msg)
-describe_error (msg, (a,b,c)) =
-    [ H.text msg
-    , H.text ":"
-    , space
-    , important_digits a
-    , space
-    , operator "·"
-    , space
-    , important_digits b
-    , space
-    , operator "≠"
-    , space
-    , important_digits c
-    , space
-    ]
+describe_error : (String, Maybe IntTriple) -> List (Html Msg)
+describe_error (msg, mtriple) = case mtriple of
+    Nothing -> [ H.text msg ]
+    Just (a,b,c) ->
+        [ H.text msg
+        , H.text ":"
+        , space
+        , important_digits a
+        , space
+        , operator "·"
+        , space
+        , important_digits b
+        , space
+        , operator "≠"
+        , space
+        , important_digits c
+        , space
+        ]
