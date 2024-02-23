@@ -1,12 +1,63 @@
 :root {
     --sequence-item-background: #eee;
 }
-body {
-    display: grid;
-    grid-template: "hint" auto "diagram" 1fr "sequence" auto "found" auto / 1fr;
-    height: 100vh;
+
+h2 {
     margin: 0;
 }
+
+button {
+    font-size: 2em;
+    padding: 0.2em 0.5em;
+}
+
+body {
+    margin: 0;
+    font-family: sans-serif;
+}
+
+main#rules {
+    padding: 1em;
+}
+
+main#game {
+    display: grid;
+    justify-items: center;
+    align-items: center;
+    height: 100vh;
+    grid-template: 
+        "hint rules" 8em
+        "diagram controls" 3em
+        "diagram found" 1fr
+        / 1fr 20em
+        ;
+    gap: 1em;
+}
+#found-sequences {
+    align-self: start;
+}
+
+@media (max-width: 50em) {
+    main#game {
+        grid-template: 
+            "hint rules" 8em
+            "diagram diagram" 1fr
+            "controls controls" auto
+            "found found" 10em
+            / 1fr auto;
+        column-gap: 0;
+    }
+
+    #found-sequences > ul {
+        overflow: auto scroll;
+        height: 6em;
+    }
+}
+#hint {grid-area: hint;}
+#diagram {grid-area: diagram;}
+#controls { grid-area: controls;}
+#found-sequences { grid-area: found; }
+
 
 ul.number-list {
     display: flex;
@@ -21,6 +72,10 @@ ul.number-list {
 
 .possible:not(.used) {
     background: lightgreen;
+}
+            
+code {
+    font-size: 1.3em;
 }
 
 #sequence {
@@ -40,10 +95,6 @@ ul.number-list {
         
         & .explanation {
             text-align: center;
-            
-            & code {
-                font-size: 1.3em;
-            }
         }
     }
 }
@@ -80,4 +131,17 @@ ul.number-list {
 .jump {
     stroke: white;
     fill: none;
+}
+
+#hint {
+    padding: 0 1em;
+    align-self: end;
+
+    & p {
+        margin-bottom: 0;
+    }
+}
+
+#how-to-play {
+    font-size: 1em;
 }

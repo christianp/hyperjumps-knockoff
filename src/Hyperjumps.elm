@@ -72,9 +72,15 @@ type alias Game =
     , sequence: List Int -- List of indices into the numbers
     }
 
+type Screen
+    = RulesScreen
+    | GameScreen
+
+
 type alias Model =
     { game : Game
     , found_sequences : Set (List Int)
+    , screen : Screen
     }
 
 type Msg
@@ -84,6 +90,7 @@ type Msg
     | Backspace
     | SaveSequence
     | SetGame Game
+    | SetScreen Screen
 
 {- makes a list of:
     Nothing: not filled
@@ -115,6 +122,7 @@ init_model : Model
 init_model = 
     { game = init_game
     , found_sequences = Set.empty
+    , screen = RulesScreen
     }
 
 nocmd model = (model, Cmd.none)
@@ -139,7 +147,9 @@ update msg model =
         noop = nocmd model
     in
         case (Debug.log "msg" msg) of
-            ClickNumber i -> { model | game = use_number game i } |> nocmd
+            ClickNumber i -> case List.head game.sequence of
+                Just 0 -> model |> nocmd
+                _ -> { model | game = use_number game i } |> nocmd
 
             ClickSequence i -> 
                 { model | game = { game | sequence = game.sequence |> List.reverse |> List.take (i + 1) |> List.reverse } } |> nocmd
@@ -169,6 +179,8 @@ update msg model =
 
             SetGame ngame -> { model | game = ngame } |> nocmd
 
+            SetScreen screen -> { model | screen = screen } |> nocmd
+
 use_number game i = if used_in_sequence game i then game else { game | sequence = i :: game.sequence }
 
 verify_triples : ((a, a, a) -> b) -> List a -> List (Maybe b)
@@ -191,7 +203,11 @@ isOk r = case r of
     Ok _ -> True
     Err _ -> False
 
-valid_triple : (Int, Int, Int) -> Result String (Op, (Int,Int,Int))
+type alias IntTriple = (Int,Int,Int)
+type alias OpError = (String, IntTriple)
+type alias OpResult = (Op, IntTriple)
+
+valid_triple : (Int, Int, Int) -> Result OpError OpResult
 valid_triple (a,b,c) = 
        [Add, Subtract, Multiply, Divide]
     |> List.filterMap ((\op -> case do_op op a b of
@@ -200,14 +216,14 @@ valid_triple (a,b,c) =
     |> List.head
     |> \mres -> case mres of
         Just res -> Ok res
-        Nothing -> Err "No sums work"
+        Nothing -> Err ("No sums work", (a,b,c))
 
 filled_triple : (Maybe Int, Maybe Int,  Maybe Int) -> Maybe (Int, Int, Int)
 filled_triple (ma, mb, mc) = case (ma, mb, mc) of
     (Just a, Just b, Just c) -> Just (a,b,c)
     _ -> Nothing
 
---verify_hyperjumps : List (Maybe Int) -> List (Maybe (Op, (Int,Int,Int)))
+--verify_hyperjumps : List (Maybe Int) -> List (Maybe (Op, IntTriple))
 verify_hyperjumps = verify_triples valid_triple
 
 subscriptions : Model -> Sub Msg
@@ -226,6 +242,7 @@ subscriptions model =
 valid_sequence : Game -> Bool
 valid_sequence game =
        (game_finished game)
+    && (List.length game.sequence >= 3)
     && (   make_sequence game
         |> verify_hyperjumps
         |> List.all (\v -> case v of
@@ -242,9 +259,43 @@ game_finished game =
     |> Maybe.map second
     |> Maybe.withDefault False
 
-
 view : Model -> Browser.Document Msg
-view model = 
+view model =
+    { title = "Hyperjumps"
+    , body = [ case model.screen of
+        RulesScreen -> H.main_ [ HA.id "rules" ] (view_rules model)
+        GameScreen -> H.main_ [ HA.id "game" ] (view_game model)
+        ]
+    }
+
+para text = H.p [] [ H.text text ]
+
+view_rules : Model -> List (Html Msg)
+view_rules model =
+    [ H.h1 [] [ H.text "Hyperjumps" ]
+    , para "Jump between the planets and try to end up at the destination planet."
+    , para "Your first two jumps are free, but after that, your jumps must follow this rule:"
+    , para "Combine the number of the previous planet and the one you're currently on, with either addition, subtraction, multiplication or division, to make a positive whole number."
+    , para "You can jump to planets whose number is the same as the last digit as the result of the combination you choose."
+    , H.p [] [H.text "For example, if you last visited ", important_digits 6, H.text " and then ", important_digits 3, H.text", you can combine them in the following ways:" ]
+    , H.ul
+        []
+        [ H.li [] (describe_op (Add, (6,3,9)))
+        , H.li [] (describe_op (Subtract, (6,3,3)))
+        , H.li [] (describe_op (Multiply, (6,3,18)))
+        , H.li [] (describe_op (Divide, (6,3,2)))
+        ]
+    , H.p [] [H.text "So you can visit planets numbered ", important_digits 9, H.text ", ", important_digits 3, H.text ", ", important_digits 8, H.text " or ", important_digits 2, H.text "."]
+    , H.p [] [H.text "Once you've reached the destination planet, click the ", H.strong [] [H.text "launch"], H.text " button to finish the sequence."]
+    , para "Try to find as many different sequences as you can."
+    , H.button 
+        [ HE.onClick (SetScreen GameScreen)
+        ]
+        [ H.text "Play" ]
+    ]
+
+view_game : Model -> List (Html Msg)
+view_game model = 
     let
         game = model.game
 
@@ -288,26 +339,6 @@ view model =
                         [H.text <| fi n]
                     ]
 
-        view_sequence_item : Int -> (Int, Maybe (Result String (Op, (Int, Int, Int)))) -> Html Msg
-        view_sequence_item i (n, verity) =
-            H.li
-                []
-                [ H.span
-                    []
-                    [ H.text <| fi n
-                    ]
-                , H.div
-                    [ HA.classList
-                        [ ("explanation", True)
-                        ]
-                    ]
-                    [ case verity of
-                        Nothing -> H.text ""
-                        Just (Ok operation) -> H.span [ HA.class "explanation" ] (describe_op operation)
-                        Just (Err msg) -> H.span [ HA.class "error" ] [ H.text msg ]
-                    ]
-                ]
-
         gap_radiuses = 2
 
         big_r = 100
@@ -335,9 +366,48 @@ view model =
 
         rocket_angle = (angle_for rocket_planet) * 180 / pi - 90
 
-        hint = case sequence of
-            b::a::_ -> "Find a planet you can get to by combining "++(fi b)++" and "++(fi a)++"."
-            _ -> "Pick any planet to jump to."
+        at_destination = rocket_planet == 0
+
+        last_move = verifications |> List.reverse |> List.head
+
+        last_move_is_wrong = 
+               case last_move of
+                   Just (Just (Err _)) -> True
+                   _ -> False
+
+        ended_too_soon = at_destination && List.length game.sequence < 3
+
+        hint = 
+            if last_move_is_wrong || ended_too_soon then
+                "Click on a previous planet."
+            else
+                case (List.head game.sequence, List.reverse sequence) of
+                    (Just i, a::b::_) -> 
+                        if i == 0 then 
+                            "You've reached the destination. Launch!"
+                        else
+                            "Find a planet you can get to by combining "++(fi b)++" and "++(fi a)++"."
+
+                    _ -> "Pick any planet to jump to."
+
+        last_move_desc = 
+            last_move |> Maybe.map (\ld -> 
+                if ended_too_soon then
+                    [ H.text "You jumped to the destination too soon. You must visit at least 3 planets." ]
+                else
+                    case ld of
+                        Nothing -> 
+                            let
+                                n =    Array.get rocket_planet game.numbers
+                                    |> Maybe.map (first >> fi)
+                                    |> Maybe.withDefault "Home"
+                            in
+                                [ H.text <| "Jumped to "++n ]
+
+                        Just (Ok operation) -> describe_op operation
+
+                        Just (Err err) -> describe_error err
+            )
 
         view_planet : (Int, Maybe NumberInfo) -> Svg Msg
         view_planet (i,minfo) =
@@ -438,58 +508,57 @@ view model =
 
                 ]
     in
-        { title = "Hyperjumps"
-        , body = 
-            [ H.section
-                []
-                [ H.p [] [ H.text "Jump between the planets and try to end up at the destination planet. Your first two jumps are free, but after that, your jumps are limited. Combine the number of the previous planet and the one you're currently on, with either addition, subtraction, multiplication or division. You can jump to planets whose number is the same as the last digit as the result of the combination you choose." ]
-                , H.p [] [ H.strong [] [H.text "Hint:"], H.text " ", H.text hint ]
-                ]
+        [ H.section
+            [ HA.id "hint" ]
+            [ case last_move_desc of
+                Nothing -> H.text ""
+                Just desc -> H.p [] ([H.strong [] [H.text "Last move:"], H.text " "]++desc)
 
-            , view_diagram
-
-            , H.section
-                []
-                
-                [ H.ul
-                    [ HA.id "sequence"
-                    , HA.class "number-list"
-                    ]
-                    (List.indexedMap view_sequence_item <| List.map2 pair sequence verifications)
-
-                , H.button
-                    [ HE.onClick Backspace
-                    , HA.disabled <| 0 == (List.length game.sequence)
-                    ]
-                    [ H.text "Undo" ]
-
-                , H.button
-                    [ HE.onClick SaveSequence
-                    , HA.disabled <| not <| valid_sequence <| game
-                    ]
-                    [ H.text "Launch" ]
-                ]
-
-            , H.section
-                []
-                [ H.h2 [] [H.text "Found sequences" ]
-                , H.ul
-                    [ HA.id "found-sequences" ]
-                    (List.map (\l ->
-                        H.li
-                            []
-                            [ H.ul
-                                [ HA.class "number-list" ]
-                                (List.map (\n -> H.li [] [H.text <| fi n]) l)
-                            ]
-                        )
-                        (model.found_sequences |> Set.toList |> List.sortBy (\s -> (List.length s, s)))
-                    )
-                ]
+            , H.p [] [ H.strong [] [H.text "Next move:"], H.text " ", H.text hint ]
             ]
-        }
 
-describe_op : (Op, (Int,Int,Int)) -> List (Html Msg)
+        , H.button
+            [ HE.onClick (SetScreen RulesScreen)
+            , HA.id "how-to-play"
+            ]
+            [ H.text "How to play" ]
+
+        , view_diagram
+
+        , H.section
+            [ HA.id "controls" ]
+            [ H.button
+                [ HE.onClick SaveSequence
+                , HA.disabled <| not <| valid_sequence <| game
+                , HA.id "launch"
+                ]
+                [ H.text "Launch" ]
+            ]
+
+        , H.section
+            [ HA.id "found-sequences" ]
+            [ H.h2 [] [H.text "Found sequences" ]
+            , H.ul
+                []
+                (List.map (\l ->
+                    H.li
+                        []
+                        [ H.ul
+                            [ HA.class "number-list" ]
+                            (List.map (\n -> H.li [] [H.text <| fi n]) l)
+                        ]
+                    )
+                    (model.found_sequences |> Set.toList |> List.sortBy (\s -> (List.length s, s)))
+                )
+            ]
+        ]
+
+space = H.text " "
+important_digits n = H.strong [] [ H.text <| fi n ]
+unimportant_digits n = H.small [] [ H.text <| fi n ]
+operator s = H.code [] [ H.text s ]
+
+describe_op : (Op, IntTriple) -> List (Html Msg)
 describe_op (op, (a,b,c)) =
     let
         op_symbol = case op of
@@ -498,11 +567,6 @@ describe_op (op, (a,b,c)) =
             Multiply -> "×"
             Divide -> "÷"
 
-        important_digits n = H.strong [] [ H.text <| fi n ]
-        unimportant_digits n = H.small [] [ H.text <| fi n ]
-        operator s = H.code [] [ H.text s ]
-
-        space = H.text " "
     in
         [ important_digits a
         , space
@@ -516,3 +580,19 @@ describe_op (op, (a,b,c)) =
         , important_digits (modBy 10 c)
         ]
 
+describe_error : (String, IntTriple) -> List (Html Msg)
+describe_error (msg, (a,b,c)) =
+    [ H.text msg
+    , H.text ":"
+    , space
+    , important_digits a
+    , space
+    , operator "·"
+    , space
+    , important_digits b
+    , space
+    , operator "≠"
+    , space
+    , important_digits c
+    , space
+    ]
